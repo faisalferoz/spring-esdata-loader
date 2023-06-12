@@ -1,7 +1,7 @@
 
 plugins {
   id "java"
-  id "com.gradle.build-scan" version "2.4.2"
+  id "com.gradle.build-scan" version "3.13.3"
 
   id "nebula.dependency-lock" version "8.0.0" apply false
   id "nebula.info-dependencies" version "5.1.0" apply false
@@ -24,7 +24,9 @@ buildScan {
 
 allprojects {
   apply plugin: 'nebula.publish-verification'
-  group = "com.github.tinesoft"
+  apply plugin: 'eclipse'
+  group = "com.github.faisalferoz"
+  version = '2.0.0-SNAPSHOT'
   repositories {
     jcenter()
   }
@@ -34,6 +36,7 @@ subprojects { apply plugin: "java" }
 
 project(":spring-esdata-loader-core") {
   description = "Core implementation of spring-esdata-loader: a library to easily load data to test your spring-data-elasticsearch-based projects"
+  apply plugin: 'maven'
 }
 
 project(":spring-esdata-loader-junit4") {
@@ -42,6 +45,7 @@ project(":spring-esdata-loader-junit4") {
     api project(":spring-esdata-loader-core")
   }
   description = "JUnit4 implementation of spring-esdata-loader: a library to easily load data to test your spring-data-elasticsearch-based projects"
+  apply plugin: 'maven'
 }
 
 project(":spring-esdata-loader-junit-jupiter") {
@@ -50,6 +54,7 @@ project(":spring-esdata-loader-junit-jupiter") {
     api project(":spring-esdata-loader-core")
   }
   description = "JUnit Jupiter implementation of spring-esdata-loader: a library to easily load data to test your spring-data-elasticsearch-based projects"
+  apply plugin: 'maven'
 }
 
 project(":spring-esdata-loader-demo") {

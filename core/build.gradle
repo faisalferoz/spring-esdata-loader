@@ -6,8 +6,8 @@ plugins {
 apply from: "$rootDir/gradle/submodule.gradle"
 
 dependencies {
-  implementation 'com.fasterxml.jackson.core:jackson-databind:2.9.9'
-  api 'org.springframework.data:spring-data-elasticsearch:3.+'
+  implementation 'com.fasterxml.jackson.core:jackson-databind:2.13.4'
+  api 'org.springframework.data:spring-data-elasticsearch:4.+'
   api 'org.springframework:spring-test:5.+'
   api 'org.slf4j:slf4j-api:1.7.+'
 

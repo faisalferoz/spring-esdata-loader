@@ -1,25 +1,36 @@
 package com.github.spring.esdata.loader.core;
 
 
-import com.fasterxml.jackson.core.JsonParser;
-import com.fasterxml.jackson.core.JsonToken;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
-import org.springframework.data.elasticsearch.core.mapping.ElasticsearchPersistentEntity;
-import org.springframework.data.elasticsearch.core.query.IndexQuery;
-import org.springframework.data.elasticsearch.core.query.IndexQueryBuilder;
-
-import java.io.*;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.Reader;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
-import java.util.*;
+import java.util.Iterator;
+import java.util.List;
+import java.util.NoSuchElementException;
+import java.util.Spliterator;
+import java.util.Spliterators;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 import java.util.zip.GZIPInputStream;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
+import org.springframework.data.elasticsearch.core.IndexOperations;
+import org.springframework.data.elasticsearch.core.mapping.ElasticsearchPersistentEntity;
+import org.springframework.data.elasticsearch.core.query.IndexQuery;
+import org.springframework.data.elasticsearch.core.query.IndexQueryBuilder;
+
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonToken;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
  * Loader that use Spring Data's {@link ElasticsearchOperations} to load data into Elasticsearch.
@@ -50,12 +61,13 @@ public class SpringEsDataLoader implements EsDataLoader {
    * @param esEntityClass the data to load
    */
   @Override
-  public void delete(Class<?> esEntityClass) {
+  public void delete(final Class<?> esEntityClass) {
     LOGGER.debug("Dropping data in Index '{}'...", esEntityClass.getSimpleName());
-    this.esOperations.deleteIndex(esEntityClass);
-    this.esOperations.createIndex(esEntityClass);
-    this.esOperations.putMapping(esEntityClass);
-    this.esOperations.refresh(esEntityClass);
+    final IndexOperations indexOps = this.esOperations.indexOps(esEntityClass);
+    indexOps.delete();
+    indexOps.create();
+    indexOps.putMapping();
+    indexOps.refresh();
 
   }
 
@@ -69,12 +81,14 @@ public class SpringEsDataLoader implements EsDataLoader {
 
     // first recreate the index
     LOGGER.debug("Recreating Index for '{}'...", d.getEsEntityClass().getSimpleName());
-    this.esOperations.deleteIndex(d.esEntityClass);
-    this.esOperations.createIndex(d.esEntityClass);
-    this.esOperations.putMapping(d.esEntityClass);
-    this.esOperations.refresh(d.esEntityClass);
+    final IndexOperations indexOps = this.esOperations.indexOps(d.esEntityClass);
+    indexOps.delete();
+    indexOps.create();
+    indexOps.putMapping();
+    indexOps.refresh();
 
-    ElasticsearchPersistentEntity<?> esEntityInfo = this.esOperations.getPersistentEntityFor(d.esEntityClass);
+    final ElasticsearchPersistentEntity<?> esEntityInfo = this.esOperations.getElasticsearchConverter().getMappingContext().getPersistentEntity(d.esEntityClass);
+//    final ElasticsearchPersistentEntity<?> esEntityInfo = this.esOperations.getPersistentEntityFor(d.esEntityClass);
 
     LOGGER.debug("Inserting data in Index of '{}'. Please wait...", d.getEsEntityClass().getSimpleName());
 
@@ -85,10 +99,10 @@ public class SpringEsDataLoader implements EsDataLoader {
 
       final EsDataFormat format = getEsDataFormat(br, d.format);
 
-      List<IndexQuery> indexQueries = (format == EsDataFormat.DUMP ? br.lines() : this.toJsonArrayStream(br)) // each item represent a document to be indexed
+      final List<IndexQuery> indexQueries = (format == EsDataFormat.DUMP ? br.lines() : this.toJsonArrayStream(br)) // each item represent a document to be indexed
         .parallel()// let's speed things up a lil'bit :)
         .peek((l) -> LOGGER.debug("Preparing IndexQuery for line: '{}'", l))//
-        .map(json -> getIndexQuery(json, esEntityInfo.getIndexName(), esEntityInfo.getIndexType(), format))//
+        .map(json -> getIndexQuery(json, esEntityInfo.getIndexCoordinates().getIndexName(), format))//
         .skip(d.nbSkipItems)//
         .limit(d.nbMaxItems)//
         .collect(Collectors.toList());
@@ -98,11 +112,11 @@ public class SpringEsDataLoader implements EsDataLoader {
         return;
       }
 
-      this.esOperations.bulkIndex(indexQueries);
-      this.esOperations.refresh(d.esEntityClass);
+      this.esOperations.bulkIndex(indexQueries, d.esEntityClass);
+      indexOps.refresh();
 
       LOGGER.debug("Insertion successfully done");
-    } catch (IOException e) {
+    } catch (final IOException e) {
       throw new UncheckedIOException(e);
     }
   }
@@ -112,30 +126,28 @@ public class SpringEsDataLoader implements EsDataLoader {
    *
    * @param jsonContent the data to be inserted, expressed as JSON
    * @param indexName   the name of the target index
-   * @param indexType   the type of the target index
    * @param format      the format of data to index
    * @return the {@link IndexQuery} built from the parsed JSON
    */
-  private static IndexQuery getIndexQuery(final String jsonContent, final String indexName, final String indexType, final EsDataFormat format) {
+  private static IndexQuery getIndexQuery(final String jsonContent, final String indexName, final EsDataFormat format) {
 
     try {
       String id = null;
       String source = jsonContent;
 
       if (format == EsDataFormat.DUMP) {
-        JsonNode jsonNode = OBJECT_MAPPER.readTree(jsonContent);
+        final JsonNode jsonNode = OBJECT_MAPPER.readTree(jsonContent);
         id = jsonNode.get("_id").textValue();
         source = jsonNode.get("_source").toString();
       }
 
       return new IndexQueryBuilder()//
         .withId(id)//
-        .withIndexName(indexName)//
-        .withType(indexType)//
+        .withIndex(indexName)//
         .withSource(source)//
         .build();
 
-    } catch (IOException e) {
+    } catch (final IOException e) {
       throw new UncheckedIOException(e);
     }
   }
@@ -148,13 +160,13 @@ public class SpringEsDataLoader implements EsDataLoader {
    * @return the es data format
    * @throws IOException
    */
-  private static EsDataFormat getEsDataFormat(BufferedReader br, EsDataFormat esDataFormat) throws IOException {
+  private static EsDataFormat getEsDataFormat(final BufferedReader br, final EsDataFormat esDataFormat) throws IOException {
     if (esDataFormat != EsDataFormat.UNKNOWN)
       return esDataFormat;
 
     // try to detect the format from the content of the json content
     br.mark(1024);// mark the stream at the beginning, to later rewind to that position
-    String firstLine = br.lines().filter(l -> !l.isEmpty()).findFirst().orElse("");
+    final String firstLine = br.lines().filter(l -> !l.isEmpty()).findFirst().orElse("");
     br.reset();// rewind the stream to the last mark
 
     if (firstLine.contains("_index") && firstLine.contains("_source"))
@@ -172,12 +184,12 @@ public class SpringEsDataLoader implements EsDataLoader {
    * @return a {@link Stream} of JSON objects as String
    * @throws IOException
    */
-  private Stream<String> toJsonArrayStream(Reader reader) throws IOException {
+  private Stream<String> toJsonArrayStream(final Reader reader) throws IOException {
     final JsonParser jsonParser = OBJECT_MAPPER.getFactory().createParser(reader);
     if (jsonParser.nextToken() != JsonToken.START_ARRAY) {
       throw new IllegalStateException("Not a valid EsDataFormat.MANUAL format. Expected an array");
     }
-    Iterator<String> iterator = new Iterator<String>() {
+    final Iterator<String> iterator = new Iterator<String>() {
       String nextObject = null;
 
       @Override
@@ -188,7 +200,7 @@ public class SpringEsDataLoader implements EsDataLoader {
           try {
             this.nextObject = this.readObject();
             return (this.nextObject != null);
-          } catch (IOException e) {
+          } catch (final IOException e) {
             throw new UncheckedIOException(e);
           }
         }
@@ -197,7 +209,7 @@ public class SpringEsDataLoader implements EsDataLoader {
       @Override
       public String next() {
         if (this.nextObject != null || this.hasNext()) {
-          String object = this.nextObject;
+          final String object = this.nextObject;
           this.nextObject = null;
           return object;
         } else {
@@ -206,7 +218,7 @@ public class SpringEsDataLoader implements EsDataLoader {
       }
 
       String readObject() throws IOException {
-        JsonToken nextToken = jsonParser.nextToken();
+        final JsonToken nextToken = jsonParser.nextToken();
         if (nextToken != null && nextToken != JsonToken.END_ARRAY) {
           return OBJECT_MAPPER.readTree(jsonParser).toString();
         }
