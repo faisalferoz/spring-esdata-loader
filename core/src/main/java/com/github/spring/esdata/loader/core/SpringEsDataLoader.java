@@ -9,11 +9,9 @@ import java.io.Reader;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Iterator;
-import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Spliterator;
 import java.util.Spliterators;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 import java.util.zip.GZIPInputStream;
@@ -88,7 +86,6 @@ public class SpringEsDataLoader implements EsDataLoader {
     indexOps.refresh();
 
     final ElasticsearchPersistentEntity<?> esEntityInfo = this.esOperations.getElasticsearchConverter().getMappingContext().getPersistentEntity(d.esEntityClass);
-//    final ElasticsearchPersistentEntity<?> esEntityInfo = this.esOperations.getPersistentEntityFor(d.esEntityClass);
 
     LOGGER.debug("Inserting data in Index of '{}'. Please wait...", d.getEsEntityClass().getSimpleName());
 
@@ -99,20 +96,14 @@ public class SpringEsDataLoader implements EsDataLoader {
 
       final EsDataFormat format = getEsDataFormat(br, d.format);
 
-      final List<IndexQuery> indexQueries = (format == EsDataFormat.DUMP ? br.lines() : this.toJsonArrayStream(br)) // each item represent a document to be indexed
+      (format == EsDataFormat.DUMP ? br.lines() : this.toJsonArrayStream(br)) // each item represent a document to be indexed
         .parallel()// let's speed things up a lil'bit :)
         .peek((l) -> LOGGER.debug("Preparing IndexQuery for line: '{}'", l))//
         .map(json -> getIndexQuery(json, esEntityInfo.getIndexCoordinates().getIndexName(), format))//
         .skip(d.nbSkipItems)//
         .limit(d.nbMaxItems)//
-        .collect(Collectors.toList());
+        .forEach(query -> this.esOperations.index(query, indexOps.getIndexCoordinates()));
 
-      if (indexQueries.isEmpty()) {
-        LOGGER.warn("There are no data to load from file at '{}'. Please review its content", d.location);
-        return;
-      }
-
-      this.esOperations.bulkIndex(indexQueries, d.esEntityClass);
       indexOps.refresh();
 
       LOGGER.debug("Insertion successfully done");
